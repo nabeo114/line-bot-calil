@@ -14,6 +14,9 @@ import time
 import boto3
 import decimal
 
+import numpy as np
+import cv2
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -30,7 +33,11 @@ if channel_access_token is None:
 dynamodb = boto3.resource('dynamodb', region_name=os.environ['Region'])
 table = dynamodb.Table(os.environ['TableName'])
 
+bd = cv2.barcode.BarcodeDetector()
+
 max_library = 8
+
+logger.info(sys.path)
 
 def lambda_handler(event, context):
     logger.info(json.dumps(event))
@@ -177,6 +184,67 @@ def lambda_handler(event, context):
                                 'items': reply_item
                             }
                         })
+            elif event_data['message']['type'] == 'image':
+                content_type = event_data['message']['contentProvider']['type']
+                
+                if content_type == 'line':
+                    url = 'https://api-data.line.me/v2/bot/message/'
+                    headers = {
+                        'Authorization': 'Bearer ' + channel_access_token,
+                    }
+                    req = urllib.request.Request(url + str(event_data['message']['id']) + '/content', headers=headers)
+                    with urllib.request.urlopen(req) as res:
+                        res_body = res.read()
+                        
+                        arr = np.frombuffer(res_body, dtype=np.uint8)
+                        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                        retval, decoded_info, decoded_type, points = bd.detectAndDecode(img)
+                        if retval == True:
+                            logger.info(decoded_info)
+                            
+                            reply_text = ''
+                            reply_item = [{
+                                'type': 'action',
+                                'action': {
+                                    'type': 'message',
+                                    'label': 'やめる',
+                                    'text': 'やめる'
+                                }
+                            }]
+                            
+                            for i, code in enumerate(decoded_info):
+                                logger.info(code)
+                                if code != '':
+                                    reply_text += str(i+1) + '. ' + code + '\n'
+                                    reply_item.append({
+                                        'type': 'action',
+                                        'action': {
+                                            'type': 'message',
+                                            'label': code,
+                                            'text': code
+                                        }
+                                    })
+                            
+                            if reply_text == '':
+                                message_body = [{
+                                    'type': 'text',
+                                    'text': 'バーコードを読み取れません。'
+                                }]
+                            else:
+                                message_body = [{
+                                    'type': 'text',
+                                    'text': 'バーコードを読み取りました。\n' + reply_text + '\n調べたい書籍のISBNを教えて下さい。',
+                                    'quickReply': {
+                                        'items': reply_item
+                                    }
+                                }]
+                        else:
+                            message_body = [{
+                                'type': 'text',
+                                'text': 'バーコードが見つかりません。'
+                            }]
+                else:
+                    continue
             elif event_data['message']['type'] == 'text':
                 message_text = event_data['message']['text']
                 valid_isbn = r'^(\d{10}|\d{13})$'
@@ -245,7 +313,31 @@ def lambda_handler(event, context):
                         
                         message_body = [{
                             'type': 'text',
-                            'text': '以下のお気に入り図書館の蔵書をお調べします。\n' + reply_text + '\n調べたい書籍のISBN(10桁または13桁の数字)を教えて下さい。\n例：4834000826',
+                            'text': '以下のお気に入り図書館の蔵書をお調べします。\n' + reply_text + '\n調べたい書籍のISBN(バーコードの画像、もしくは10桁または13桁の数字)を教えて下さい。\n例：9784834000825',
+                            'quickReply': {
+                                'items': [{
+                                    'type': 'action',
+                                    'action': {
+                                        'type': 'message',
+                                        'label': 'やめる',
+                                        'text': 'やめる'
+                                    }
+                                },
+                                {
+                                    'type': 'action',
+                                    'action': {
+                                        'type': 'camera',
+                                        'label': 'カメラを起動する'
+                                    }
+                                },
+                                {
+                                    'type': 'action',
+                                    'action': {
+                                        'type': 'cameraRoll',
+                                        'label': 'カメラロールを開く'
+                                    }
+                                }]
+                            }
                         }]
                 # ISBN(10桁または13桁の数字)
                 elif re.match(valid_isbn, message_text) is not None:
@@ -448,7 +540,7 @@ def lambda_handler(event, context):
             favorites = response["Item"]['favorites']
             
             if action == 'add':
-                if len(libraries) != 0 and len(libraries) >= int(number):
+                if len(libraries) != 0 and int(number) <= len(libraries):
                     if len(favorites) < max_library:
                         reply_text = ''
                         for i, library in enumerate(favorites):
@@ -508,7 +600,7 @@ def lambda_handler(event, context):
                             }
                         }]
             elif action == 'remove':
-                if len(favorites) != 0 and len(favorites) >= int(number):
+                if len(favorites) != 0 and int(number) <= len(favorites):
                     reply_text = favorites[int(number)-1]['short']
                     
                     favorites.pop(int(number)-1)
