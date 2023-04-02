@@ -37,7 +37,7 @@ bd = cv2.barcode.BarcodeDetector()
 
 max_library = 8
 
-logger.info(sys.path)
+
 
 def lambda_handler(event, context):
     logger.info(json.dumps(event))
